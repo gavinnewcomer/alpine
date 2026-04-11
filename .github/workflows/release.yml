@@ -26,12 +26,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
       - name: Get version from Cargo.toml
         id: version
         run: |
@@ -48,18 +42,10 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate coverage report
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          cargo llvm-cov --features all --lcov --output-path lcov.info
-          cargo llvm-cov --features all --no-run 2>&1 | tee coverage-summary.txt
-
-      - name: Create prerelease with coverage
+      - name: Create prerelease
         if: steps.check.outputs.exists == 'false'
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            lcov.info \
-            coverage-summary.txt \
             --title "${{ steps.version.outputs.tag }} (prerelease)" \
             --generate-notes \
             --prerelease

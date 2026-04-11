@@ -1,6 +1,6 @@
 [package]
 name = "alpine-ai"
-version = "0.2.1"
+version = "0.2.0"
 edition = "2024"
 description = "A lightweight, low-bulk interface for all major LLM providers"
 repository = "https://github.com/gavinnewcomer/alpine"
