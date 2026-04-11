@@ -1,9 +1,9 @@
 name: Release
 
 on:
-  # Auto-prerelease on merge to main
+  # Auto-prerelease on merge to default branch
   push:
-    branches: [main]
+    branches: [master, main]
 
   # Manual promotion to full release
   workflow_dispatch:
