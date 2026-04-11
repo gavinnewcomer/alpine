@@ -1,15 +1,25 @@
 name: Release
 
 on:
+  # Auto-prerelease on merge to main
   push:
     branches: [main]
+
+  # Manual promotion to full release
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to promote (e.g. v0.1.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: Tag & Release
+  prerelease:
+    name: Create Prerelease
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +42,27 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create tag and release
+      - name: Create prerelease
         if: steps.check.outputs.exists == 'false'
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --generate-notes
+            --title "${{ steps.version.outputs.tag }} (prerelease)" \
+            --generate-notes \
+            --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  promote:
+    name: Promote to Release
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Promote prerelease to release
+        run: |
+          gh release edit "${{ inputs.tag }}" \
+            --prerelease=false \
+            --title "${{ inputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
