@@ -35,3 +35,30 @@ jobs:
         run: cargo test
       - name: Test (all features)
         run: cargo test --features all
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: cargo llvm-cov --features all --lcov --output-path lcov.info
+
+      - name: Generate coverage summary
+        run: cargo llvm-cov --features all --no-run 2>&1 | tee coverage-summary.txt
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Coverage report
+        run: cat coverage-summary.txt

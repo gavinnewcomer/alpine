@@ -1,5 +1,8 @@
 # Alpine
 
+[![CI](https://github.com/gavinnewcomer/alpine/actions/workflows/rust.yml/badge.svg)](https://github.com/gavinnewcomer/alpine/actions/workflows/rust.yml)
+[![codecov](https://codecov.io/gh/gavinnewcomer/alpine/graph/badge.svg)](https://codecov.io/gh/gavinnewcomer/alpine)
+
 Alpine provides a lightweight, low-bulk interface for all major LLM providers. It exposes composable types for responses, which allows for simple chat sessions or can be plugged into larger projects.
 
 One `Request` type, one `Response` type, swap providers with a single line.
