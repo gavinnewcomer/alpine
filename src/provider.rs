@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::ProviderError;
-use crate::types::{
-    EmbedRequest, Embedding, ModelId, Request, Response, StreamResponse,
-};
+use crate::types::{EmbedRequest, Embedding, ModelId, Request, Response, StreamResponse};
 
 #[async_trait]
 pub trait Provider: Send + Sync {

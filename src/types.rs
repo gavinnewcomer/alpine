@@ -44,15 +44,24 @@ pub struct Message {
 
 impl Message {
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: Role::User, content: content.into() }
+        Self {
+            role: Role::User,
+            content: content.into(),
+        }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: Role::Assistant, content: content.into() }
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+        }
     }
 
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: Role::System, content: content.into() }
+        Self {
+            role: Role::System,
+            content: content.into(),
+        }
     }
 }
 
@@ -94,18 +103,13 @@ pub struct Usage {
     pub output_tokens: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum FinishReason {
+    #[default]
     Stop,
     MaxTokens,
     ContentFilter,
     Other(String),
-}
-
-impl Default for FinishReason {
-    fn default() -> Self {
-        Self::Stop
-    }
 }
 
 impl std::fmt::Display for Response {
@@ -256,7 +260,10 @@ mod tests {
     fn response_display() {
         let resp = Response {
             content: "Hello!".into(),
-            usage: Usage { input_tokens: 10, output_tokens: 5 },
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+            },
             model: ModelId::new("test-model"),
             finish_reason: FinishReason::Stop,
             latency: Duration::from_millis(1234),
@@ -304,7 +311,12 @@ mod tests {
     fn stream_chunk_debug() {
         let _ = format!("{:?}", StreamChunk::Delta("hi".into()));
         let _ = format!("{:?}", StreamChunk::Done { usage: None });
-        let _ = format!("{:?}", StreamChunk::Done { usage: Some(Usage::default()) });
+        let _ = format!(
+            "{:?}",
+            StreamChunk::Done {
+                usage: Some(Usage::default())
+            }
+        );
         let _ = format!("{:?}", StreamChunk::Error("err".into()));
     }
 
@@ -325,7 +337,10 @@ mod tests {
         let e = Embedding {
             vectors: vec![vec![0.1, 0.2], vec![0.3, 0.4]],
             model: ModelId::new("nomic"),
-            usage: Usage { input_tokens: 4, output_tokens: 0 },
+            usage: Usage {
+                input_tokens: 4,
+                output_tokens: 0,
+            },
         };
         assert_eq!(e.vectors.len(), 2);
         assert_eq!(e.vectors[0].len(), 2);

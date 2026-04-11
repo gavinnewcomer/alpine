@@ -27,7 +27,10 @@ mod tests {
 
     #[test]
     fn api_error_display() {
-        let e = ProviderError::Api { status: 429, message: "rate limit".into() };
+        let e = ProviderError::Api {
+            status: 429,
+            message: "rate limit".into(),
+        };
         let s = e.to_string();
         assert!(s.contains("429"));
         assert!(s.contains("rate limit"));
@@ -62,9 +65,7 @@ mod tests {
     fn http_error_from_reqwest() {
         // Build a reqwest error by sending to an invalid URL
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt.block_on(async {
-            reqwest::get("http://[::0]:0/invalid").await.unwrap_err()
-        });
+        let err = rt.block_on(async { reqwest::get("http://[::0]:0/invalid").await.unwrap_err() });
         let pe = ProviderError::from(err);
         assert!(pe.to_string().contains("HTTP error"));
     }

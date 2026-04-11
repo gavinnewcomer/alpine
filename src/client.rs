@@ -27,18 +27,12 @@ impl AlpineClient {
     pub async fn complete(&self, req: Request) -> Result<Response, ProviderError> {
         let provider = Arc::clone(&self.provider);
 
-        let core: Next = Box::new(move |r| {
-            Box::pin(async move { provider.complete(&r).await })
-        });
+        let core: Next = Box::new(move |r| Box::pin(async move { provider.complete(&r).await }));
 
-        let chain = self
-            .middleware
-            .iter()
-            .rev()
-            .fold(core, |next, mw| {
-                let mw = Arc::clone(mw);
-                Box::new(move |r| mw.handle(r, next))
-            });
+        let chain = self.middleware.iter().rev().fold(core, |next, mw| {
+            let mw = Arc::clone(mw);
+            Box::new(move |r| mw.handle(r, next))
+        });
 
         chain(req).await
     }
@@ -84,7 +78,10 @@ mod tests {
         async fn complete(&self, _req: &Request) -> Result<Response, ProviderError> {
             Ok(Response {
                 content: self.content.clone(),
-                usage: Usage { input_tokens: 1, output_tokens: 2 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 2,
+                },
                 model: self.model.clone(),
                 finish_reason: FinishReason::Stop,
                 latency: Duration::ZERO,
@@ -113,7 +110,9 @@ mod tests {
 
     impl AppendMiddleware {
         fn new(suffix: &str) -> Self {
-            Self { suffix: suffix.into() }
+            Self {
+                suffix: suffix.into(),
+            }
         }
     }
 
@@ -180,8 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn complete_middleware_error() {
-        let client = AlpineClient::new(StubProvider::new("x"))
-            .with_middleware(ErrorMiddleware);
+        let client = AlpineClient::new(StubProvider::new("x")).with_middleware(ErrorMiddleware);
         let err = client.complete(Request::default()).await.unwrap_err();
         assert!(err.to_string().contains("middleware error"));
     }

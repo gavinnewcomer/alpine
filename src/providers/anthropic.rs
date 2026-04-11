@@ -124,15 +124,13 @@ impl Provider for AnthropicProvider {
 
                     // Need more data from the network.
                     match state.inner.next().await {
-                        Some(Ok(bytes)) => {
-                            match std::str::from_utf8(&bytes) {
-                                Ok(s) => state.buf.push_str(s),
-                                Err(e) => {
-                                    state.done = true;
-                                    return Some((StreamChunk::Error(e.to_string()), state));
-                                }
+                        Some(Ok(bytes)) => match std::str::from_utf8(&bytes) {
+                            Ok(s) => state.buf.push_str(s),
+                            Err(e) => {
+                                state.done = true;
+                                return Some((StreamChunk::Error(e.to_string()), state));
                             }
-                        }
+                        },
                         Some(Err(e)) => {
                             state.done = true;
                             return Some((StreamChunk::Error(e.to_string()), state));
@@ -161,7 +159,8 @@ impl Provider for AnthropicProvider {
 // ---------------------------------------------------------------------------
 
 struct SseState {
-    inner: std::pin::Pin<Box<dyn futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>,
+    inner:
+        std::pin::Pin<Box<dyn futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>,
     buf: String,
     done: bool,
 }
@@ -276,8 +275,14 @@ impl MessagesRequest {
         for m in &req.messages {
             match m.role {
                 Role::System => system_parts.push(m.content.clone()),
-                Role::User => messages.push(ApiMessage { role: "user".into(), content: m.content.clone() }),
-                Role::Assistant => messages.push(ApiMessage { role: "assistant".into(), content: m.content.clone() }),
+                Role::User => messages.push(ApiMessage {
+                    role: "user".into(),
+                    content: m.content.clone(),
+                }),
+                Role::Assistant => messages.push(ApiMessage {
+                    role: "assistant".into(),
+                    content: m.content.clone(),
+                }),
             }
         }
 
@@ -371,7 +376,8 @@ mod tests {
             "stop_reason": "end_turn",
             "usage": { "input_tokens": 15, "output_tokens": 8 }
         });
-        let resp = parse_messages_response(raw, &ModelId::new("fallback"), Duration::from_secs(2)).unwrap();
+        let resp = parse_messages_response(raw, &ModelId::new("fallback"), Duration::from_secs(2))
+            .unwrap();
         assert_eq!(resp.content, "Hello!");
         assert_eq!(resp.model.as_str(), "claude-sonnet-4-20250514");
         assert_eq!(resp.finish_reason, FinishReason::Stop);
@@ -455,7 +461,8 @@ mod tests {
 
     #[test]
     fn sse_content_block_delta() {
-        let mut buf = "event: content_block_delta\ndata: {\"delta\":{\"text\":\"hi\"}}\n\n".to_string();
+        let mut buf =
+            "event: content_block_delta\ndata: {\"delta\":{\"text\":\"hi\"}}\n\n".to_string();
         match try_parse_sse_frame(&mut buf) {
             Some(SseFrame::Chunk(StreamChunk::Delta(t))) => assert_eq!(t, "hi"),
             other => panic!("expected Chunk(Delta), got {other:?}"),
@@ -465,7 +472,8 @@ mod tests {
 
     #[test]
     fn sse_content_block_delta_empty_text() {
-        let mut buf = "event: content_block_delta\ndata: {\"delta\":{\"text\":\"\"}}\n\n".to_string();
+        let mut buf =
+            "event: content_block_delta\ndata: {\"delta\":{\"text\":\"\"}}\n\n".to_string();
         match try_parse_sse_frame(&mut buf) {
             Some(SseFrame::Skip) => {}
             other => panic!("expected Skip, got {other:?}"),
@@ -474,7 +482,8 @@ mod tests {
 
     #[test]
     fn sse_message_delta() {
-        let mut buf = "event: message_delta\ndata: {\"usage\":{\"output_tokens\":42}}\n\n".to_string();
+        let mut buf =
+            "event: message_delta\ndata: {\"usage\":{\"output_tokens\":42}}\n\n".to_string();
         match try_parse_sse_frame(&mut buf) {
             Some(SseFrame::Done(Some(usage))) => {
                 assert_eq!(usage.input_tokens, 0);
@@ -531,7 +540,8 @@ mod tests {
 
     #[test]
     fn sse_error_event() {
-        let mut buf = "event: error\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n".to_string();
+        let mut buf =
+            "event: error\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n".to_string();
         match try_parse_sse_frame(&mut buf) {
             Some(SseFrame::Chunk(StreamChunk::Error(msg))) => assert_eq!(msg, "overloaded"),
             other => panic!("expected Error chunk, got {other:?}"),
@@ -558,7 +568,8 @@ mod tests {
 
     #[test]
     fn sse_no_space_after_colon() {
-        let mut buf = "event:content_block_delta\ndata:{\"delta\":{\"text\":\"x\"}}\n\n".to_string();
+        let mut buf =
+            "event:content_block_delta\ndata:{\"delta\":{\"text\":\"x\"}}\n\n".to_string();
         match try_parse_sse_frame(&mut buf) {
             Some(SseFrame::Chunk(StreamChunk::Delta(t))) => assert_eq!(t, "x"),
             other => panic!("expected Delta, got {other:?}"),
@@ -711,11 +722,15 @@ mod tests {
             .mount(&server)
             .await;
 
-        let provider = AnthropicProvider::with_base_url("test-key", "claude-sonnet-4-20250514", server.uri());
-        let resp = provider.complete(&Request {
-            messages: vec![Message::user("hi")],
-            ..Default::default()
-        }).await.unwrap();
+        let provider =
+            AnthropicProvider::with_base_url("test-key", "claude-sonnet-4-20250514", server.uri());
+        let resp = provider
+            .complete(&Request {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         assert_eq!(resp.content, "Hello!");
         assert_eq!(resp.usage.input_tokens, 12);
@@ -767,10 +782,13 @@ mod tests {
             .await;
 
         let provider = AnthropicProvider::with_base_url("key", "model", server.uri());
-        let mut stream = provider.stream(&Request {
-            messages: vec![Message::user("hi")],
-            ..Default::default()
-        }).await.unwrap();
+        let mut stream = provider
+            .stream(&Request {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let mut text = String::new();
         let mut got_done = false;
@@ -821,10 +839,13 @@ mod tests {
             .await;
 
         let provider = AnthropicProvider::with_base_url("key", "model", server.uri());
-        let mut stream = provider.stream(&Request {
-            messages: vec![Message::user("hi")],
-            ..Default::default()
-        }).await.unwrap();
+        let mut stream = provider
+            .stream(&Request {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let mut chunks = Vec::new();
         while let Some(chunk) = stream.next().await {

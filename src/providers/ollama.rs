@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::ProviderError;
 use crate::provider::Provider;
 use crate::types::{
-    EmbedRequest, Embedding, FinishReason, ModelId, Request, Response, Role,
-    StreamChunk, StreamResponse, Usage,
+    EmbedRequest, Embedding, FinishReason, ModelId, Request, Response, Role, StreamChunk,
+    StreamResponse, Usage,
 };
 
 // ---------------------------------------------------------------------------
@@ -208,10 +208,7 @@ fn parse_chat_response(
     default_model: &ModelId,
     latency: std::time::Duration,
 ) -> Result<Response, ProviderError> {
-    let content = raw["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let content = raw["message"]["content"].as_str().unwrap_or("").to_string();
 
     let done_reason = raw["done_reason"].as_str().unwrap_or("stop");
     let finish_reason = match done_reason {
@@ -262,10 +259,7 @@ fn parse_stream_chunk(bytes: &[u8]) -> StreamChunk {
             return StreamChunk::Done { usage };
         }
 
-        let delta = v["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let delta = v["message"]["content"].as_str().unwrap_or("").to_string();
 
         if !delta.is_empty() {
             return StreamChunk::Delta(delta);
@@ -295,7 +289,8 @@ mod tests {
             "prompt_eval_count": 10,
             "eval_count": 20,
         });
-        let resp = parse_chat_response(raw, &ModelId::new("fallback"), Duration::from_secs(1)).unwrap();
+        let resp =
+            parse_chat_response(raw, &ModelId::new("fallback"), Duration::from_secs(1)).unwrap();
         assert_eq!(resp.content, "hello world");
         assert_eq!(resp.model.as_str(), "llama3.2");
         assert_eq!(resp.finish_reason, FinishReason::Stop);
@@ -322,7 +317,10 @@ mod tests {
     fn parse_response_done_reason_other() {
         let raw = serde_json::json!({ "done_reason": "custom_thing" });
         let resp = parse_chat_response(raw, &ModelId::new("f"), Duration::ZERO).unwrap();
-        assert_eq!(resp.finish_reason, FinishReason::Other("custom_thing".into()));
+        assert_eq!(
+            resp.finish_reason,
+            FinishReason::Other("custom_thing".into())
+        );
     }
 
     #[test]
@@ -545,10 +543,13 @@ mod tests {
             .await;
 
         let provider = OllamaProvider::with_base_url("llama3.2", server.uri());
-        let resp = provider.complete(&Request {
-            messages: vec![Message::user("hi")],
-            ..Default::default()
-        }).await.unwrap();
+        let resp = provider
+            .complete(&Request {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         assert_eq!(resp.content, "Hello!");
         assert_eq!(resp.usage.input_tokens, 8);
@@ -593,10 +594,13 @@ mod tests {
             .await;
 
         let provider = OllamaProvider::with_base_url("llama3.2", server.uri());
-        let mut stream = provider.stream(&Request {
-            messages: vec![Message::user("hi")],
-            ..Default::default()
-        }).await.unwrap();
+        let mut stream = provider
+            .stream(&Request {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let mut got_done = false;
         while let Some(chunk) = stream.next().await {
@@ -626,10 +630,13 @@ mod tests {
             .await;
 
         let provider = OllamaProvider::with_base_url("llama3.2", server.uri());
-        let mut stream = provider.stream(&Request {
-            messages: vec![Message::user("hi")],
-            ..Default::default()
-        }).await.unwrap();
+        let mut stream = provider
+            .stream(&Request {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let mut got_delta = false;
         while let Some(chunk) = stream.next().await {
@@ -672,10 +679,13 @@ mod tests {
             .await;
 
         let provider = OllamaProvider::with_base_url("nomic", server.uri());
-        let emb = provider.embed(&EmbedRequest {
-            model: ModelId::new("nomic"),
-            input: vec!["hello".into(), "world".into()],
-        }).await.unwrap();
+        let emb = provider
+            .embed(&EmbedRequest {
+                model: ModelId::new("nomic"),
+                input: vec!["hello".into(), "world".into()],
+            })
+            .await
+            .unwrap();
 
         assert_eq!(emb.vectors.len(), 2);
         assert_eq!(emb.vectors[0].len(), 3);
@@ -692,10 +702,13 @@ mod tests {
             .await;
 
         let provider = OllamaProvider::with_base_url("nomic", server.uri());
-        let err = provider.embed(&EmbedRequest {
-            model: ModelId::new("nomic"),
-            input: vec!["hi".into()],
-        }).await.unwrap_err();
+        let err = provider
+            .embed(&EmbedRequest {
+                model: ModelId::new("nomic"),
+                input: vec!["hi".into()],
+            })
+            .await
+            .unwrap_err();
         match err {
             ProviderError::Api { status, .. } => assert_eq!(status, 500),
             other => panic!("expected Api error, got {other}"),
