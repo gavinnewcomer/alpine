@@ -1,0 +1,27 @@
+[package]
+name = "alpine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+thiserror = "2"
+pin-project-lite = "0.2"
+bytes = "1"
+tokio-stream = "0.1"
+
+[features]
+default = []
+openai    = []
+anthropic = []
+gemini    = []
+ollama    = []
+all       = ["openai", "anthropic", "gemini", "ollama"]
+
+[dev-dependencies]
+wiremock = "0.6"
