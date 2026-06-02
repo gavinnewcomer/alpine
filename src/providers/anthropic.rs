@@ -6,7 +6,8 @@ use serde::Serialize;
 use crate::error::ProviderError;
 use crate::provider::Provider;
 use crate::types::{
-    FinishReason, ModelId, Request, Response, Role, StreamChunk, StreamResponse, Usage,
+    ContentBlock, FinishReason, ModelId, Request, Response, Role, StreamChunk, StreamResponse,
+    ToolDefinition, ToolUse, Usage,
 };
 
 const API_BASE: &str = "https://api.anthropic.com";
@@ -244,13 +245,49 @@ struct MessagesRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     stop_sequences: Vec<String>,
+    // Anthropic's tool schema matches our ToolDefinition field-for-field
+    // ({name, description, input_schema}), so we serialize it directly.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ToolDefinition>,
     stream: bool,
 }
 
 #[derive(Serialize)]
 struct ApiMessage {
     role: String,
-    content: String,
+    content: serde_json::Value,
+}
+
+/// Serialize a message's content blocks into Anthropic's content-array format.
+fn blocks_to_anthropic(content: &[ContentBlock]) -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = content
+        .iter()
+        .map(|b| match b {
+            ContentBlock::Text { text } => serde_json::json!({ "type": "text", "text": text }),
+            ContentBlock::ToolUse { id, name, input } => serde_json::json!({
+                "type": "tool_use",
+                "id": id,
+                "name": name,
+                "input": input,
+            }),
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                let mut v = serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": content,
+                });
+                if *is_error {
+                    v["is_error"] = serde_json::Value::Bool(true);
+                }
+                v
+            }
+        })
+        .collect();
+    serde_json::Value::Array(arr)
 }
 
 impl MessagesRequest {
@@ -274,14 +311,16 @@ impl MessagesRequest {
         let mut messages: Vec<ApiMessage> = Vec::new();
         for m in &req.messages {
             match m.role {
-                Role::System => system_parts.push(m.content.clone()),
+                // System messages contribute only their text to the top-level
+                // system field (Anthropic disallows role:"system" in the array).
+                Role::System => system_parts.push(m.text()),
                 Role::User => messages.push(ApiMessage {
                     role: "user".into(),
-                    content: m.content.clone(),
+                    content: blocks_to_anthropic(&m.content),
                 }),
                 Role::Assistant => messages.push(ApiMessage {
                     role: "assistant".into(),
-                    content: m.content.clone(),
+                    content: blocks_to_anthropic(&m.content),
                 }),
             }
         }
@@ -299,6 +338,7 @@ impl MessagesRequest {
             system,
             temperature: req.temperature,
             stop_sequences: req.stop.clone(),
+            tools: req.tools.clone(),
             stream,
         }
     }
@@ -313,28 +353,28 @@ fn parse_messages_response(
     default_model: &ModelId,
     latency: std::time::Duration,
 ) -> Result<Response, ProviderError> {
-    // Concatenate all text content blocks.
-    let content = raw["content"]
-        .as_array()
-        .map(|blocks| {
-            blocks
-                .iter()
-                .filter_map(|b| {
-                    if b["type"].as_str() == Some("text") {
-                        b["text"].as_str()
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default();
+    // Walk the content blocks: concatenate text, collect tool_use calls.
+    let mut content = String::new();
+    let mut tool_calls: Vec<ToolUse> = Vec::new();
+    if let Some(blocks) = raw["content"].as_array() {
+        for b in blocks {
+            match b["type"].as_str() {
+                Some("text") => content.push_str(b["text"].as_str().unwrap_or("")),
+                Some("tool_use") => tool_calls.push(ToolUse {
+                    id: b["id"].as_str().unwrap_or("").to_string(),
+                    name: b["name"].as_str().unwrap_or("").to_string(),
+                    input: b["input"].clone(),
+                }),
+                _ => {}
+            }
+        }
+    }
 
     let stop_reason = raw["stop_reason"].as_str().unwrap_or("end_turn");
     let finish_reason = match stop_reason {
         "end_turn" | "stop_sequence" => FinishReason::Stop,
         "max_tokens" => FinishReason::MaxTokens,
+        "tool_use" => FinishReason::ToolUse,
         other => FinishReason::Other(other.into()),
     };
 
@@ -347,6 +387,7 @@ fn parse_messages_response(
 
     Ok(Response {
         content,
+        tool_calls,
         usage,
         model: ModelId::new(model_str),
         finish_reason,
@@ -674,6 +715,81 @@ mod tests {
         let req = Request::default();
         assert!(MessagesRequest::from_request(&req, &ModelId::new("m"), true).stream);
         assert!(!MessagesRequest::from_request(&req, &ModelId::new("m"), false).stream);
+    }
+
+    // ── Tools ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn msg_request_serializes_tools() {
+        let req = Request {
+            tools: vec![crate::types::ToolDefinition::new(
+                "get_weather",
+                "Get weather",
+                serde_json::json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+            )],
+            messages: vec![Message::user("hi")],
+            ..Default::default()
+        };
+        let mr = MessagesRequest::from_request(&req, &ModelId::new("m"), false);
+        let body = serde_json::to_value(&mr).unwrap();
+        assert_eq!(body["tools"][0]["name"], "get_weather");
+        assert_eq!(body["tools"][0]["description"], "Get weather");
+        assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+        // User message content is serialized as a block array.
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn msg_request_no_tools_field_when_empty() {
+        let req = Request::default();
+        let mr = MessagesRequest::from_request(&req, &ModelId::new("m"), false);
+        let body = serde_json::to_value(&mr).unwrap();
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn msg_request_serializes_tool_result_block() {
+        let req = Request {
+            messages: vec![Message::tool_result("tu_1", "42", false)],
+            ..Default::default()
+        };
+        let mr = MessagesRequest::from_request(&req, &ModelId::new("m"), false);
+        let body = serde_json::to_value(&mr).unwrap();
+        let block = &body["messages"][0]["content"][0];
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["tool_use_id"], "tu_1");
+        assert_eq!(block["content"], "42");
+        assert!(block.get("is_error").is_none());
+    }
+
+    #[test]
+    fn parse_response_tool_use() {
+        let raw = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "Let me check." },
+                { "type": "tool_use", "id": "tu_9", "name": "get_weather", "input": {"city": "SF"} },
+            ],
+            "stop_reason": "tool_use",
+            "usage": { "input_tokens": 5, "output_tokens": 3 }
+        });
+        let resp = parse_messages_response(raw, &ModelId::new("f"), Duration::ZERO).unwrap();
+        assert_eq!(resp.content, "Let me check.");
+        assert_eq!(resp.finish_reason, FinishReason::ToolUse);
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "tu_9");
+        assert_eq!(resp.tool_calls[0].name, "get_weather");
+        assert_eq!(resp.tool_calls[0].input["city"], "SF");
+    }
+
+    #[test]
+    fn parse_response_no_tool_calls_when_text_only() {
+        let raw = serde_json::json!({
+            "content": [{ "type": "text", "text": "hi" }],
+            "stop_reason": "end_turn"
+        });
+        let resp = parse_messages_response(raw, &ModelId::new("f"), Duration::ZERO).unwrap();
+        assert!(resp.tool_calls.is_empty());
     }
 
     // ── Constructor tests ────────────────────────────────────────────────

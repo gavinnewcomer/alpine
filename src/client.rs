@@ -78,6 +78,7 @@ mod tests {
         async fn complete(&self, _req: &Request) -> Result<Response, ProviderError> {
             Ok(Response {
                 content: self.content.clone(),
+                tool_calls: vec![],
                 usage: Usage {
                     input_tokens: 1,
                     output_tokens: 2,
