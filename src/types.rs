@@ -39,29 +39,106 @@ impl std::fmt::Display for ModelId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
-    pub content: String,
+    pub content: Vec<ContentBlock>,
 }
 
 impl Message {
+    /// Construct a message from a role and explicit content blocks.
+    pub fn new(role: Role, content: Vec<ContentBlock>) -> Self {
+        Self { role, content }
+    }
+
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: content.into(),
+            content: vec![ContentBlock::text(content)],
         }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
-            content: content.into(),
+            content: vec![ContentBlock::text(content)],
         }
     }
 
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: Role::System,
-            content: content.into(),
+            content: vec![ContentBlock::text(content)],
         }
+    }
+
+    /// A user message carrying a single tool result (the conventional way to
+    /// return tool output to the model).
+    pub fn tool_result(
+        tool_use_id: impl Into<String>,
+        content: impl Into<String>,
+        is_error: bool,
+    ) -> Self {
+        Self {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: tool_use_id.into(),
+                content: content.into(),
+                is_error,
+            }],
+        }
+    }
+
+    /// Concatenate all text blocks into a single string. Non-text blocks
+    /// (tool_use / tool_result) are ignored. This is the convenience accessor
+    /// for callers that only care about textual content.
+    pub fn text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// All `tool_use` blocks in this message.
+    pub fn tool_uses(&self) -> impl Iterator<Item = &ContentBlock> {
+        self.content
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content blocks
+// ---------------------------------------------------------------------------
+
+/// A single piece of a message's content. Messages are sequences of blocks so
+/// that a turn can mix text with tool-use requests (assistant) and tool
+/// results (user) — the shape required for provider tool/function calling.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    Text {
+        text: String,
+    },
+    /// The model is requesting a tool invocation.
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// The caller is returning the result of a tool invocation.
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(default)]
+        is_error: bool,
+    },
+}
+
+impl ContentBlock {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text { text: text.into() }
     }
 }
 
@@ -85,16 +162,58 @@ pub struct Request {
     pub temperature: Option<f32>,
     pub system: Option<String>,
     pub stop: Vec<String>,
+    /// Tools the model may call. Empty (the default) means no tool calling —
+    /// identical behavior to before tool support existed.
+    pub tools: Vec<ToolDefinition>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Response {
+    /// Flattened text content (all text blocks concatenated).
     pub content: String,
+    /// Any tool calls the model requested this turn. Empty when the model
+    /// returned only text.
+    pub tool_calls: Vec<ToolUse>,
     pub usage: Usage,
     pub model: ModelId,
     pub finish_reason: FinishReason,
     pub latency: Duration,
     pub raw: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+
+/// A provider-agnostic tool the model may call. `input_schema` is a JSON Schema
+/// describing the tool's arguments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+impl ToolDefinition {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: serde_json::Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
+        }
+    }
+}
+
+/// A tool call the model requested.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -109,6 +228,8 @@ pub enum FinishReason {
     Stop,
     MaxTokens,
     ContentFilter,
+    /// The model stopped because it wants to call one or more tools.
+    ToolUse,
     Other(String),
 }
 
@@ -208,21 +329,78 @@ mod tests {
     fn message_user() {
         let m = Message::user("hi");
         assert_eq!(m.role, Role::User);
-        assert_eq!(m.content, "hi");
+        assert_eq!(m.text(), "hi");
     }
 
     #[test]
     fn message_assistant() {
         let m = Message::assistant("ok");
         assert_eq!(m.role, Role::Assistant);
-        assert_eq!(m.content, "ok");
+        assert_eq!(m.text(), "ok");
     }
 
     #[test]
     fn message_system() {
         let m = Message::system("you are helpful");
         assert_eq!(m.role, Role::System);
-        assert_eq!(m.content, "you are helpful");
+        assert_eq!(m.text(), "you are helpful");
+    }
+
+    #[test]
+    fn message_text_concatenates_and_ignores_non_text() {
+        let m = Message::new(
+            Role::Assistant,
+            vec![
+                ContentBlock::text("a"),
+                ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "x".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::text("b"),
+            ],
+        );
+        assert_eq!(m.text(), "ab");
+        assert_eq!(m.tool_uses().count(), 1);
+    }
+
+    #[test]
+    fn message_tool_result_helper() {
+        let m = Message::tool_result("tu_1", "result body", false);
+        assert_eq!(m.role, Role::User);
+        match &m.content[0] {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                assert_eq!(tool_use_id, "tu_1");
+                assert_eq!(content, "result body");
+                assert!(!is_error);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn content_block_serde_roundtrip() {
+        for block in [
+            ContentBlock::text("hi"),
+            ContentBlock::ToolUse {
+                id: "id".into(),
+                name: "search".into(),
+                input: serde_json::json!({"q": "x"}),
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: "id".into(),
+                content: "ok".into(),
+                is_error: false,
+            },
+        ] {
+            let json = serde_json::to_string(&block).unwrap();
+            let back: ContentBlock = serde_json::from_str(&json).unwrap();
+            assert_eq!(block, back);
+        }
     }
 
     // -- Role ------------------------------------------------------------------
@@ -260,6 +438,7 @@ mod tests {
     fn response_display() {
         let resp = Response {
             content: "Hello!".into(),
+            tool_calls: vec![],
             usage: Usage {
                 input_tokens: 10,
                 output_tokens: 5,

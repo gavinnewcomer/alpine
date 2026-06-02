@@ -32,6 +32,7 @@ mod tests {
         async fn complete(&self, _req: &Request) -> Result<Response, ProviderError> {
             Ok(Response {
                 content: "stub".into(),
+                tool_calls: vec![],
                 usage: Usage::default(),
                 model: self.0.clone(),
                 finish_reason: FinishReason::Stop,

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::ProviderError;
 use crate::provider::Provider;
 use crate::types::{
-    EmbedRequest, Embedding, FinishReason, ModelId, Request, Response, Role, StreamChunk,
-    StreamResponse, Usage,
+    ContentBlock, EmbedRequest, Embedding, FinishReason, ModelId, Request, Response, Role,
+    StreamChunk, StreamResponse, ToolUse, Usage,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,12 +124,30 @@ struct ChatRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<ChatOptions>,
+    // Ollama's /api/chat tool format: [{type:"function", function:{name, description, parameters}}].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize)]
 struct ChatMessage {
     role: String,
     content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+}
+
+impl ChatMessage {
+    fn text(role: impl Into<String>, content: String, tool_calls: Vec<serde_json::Value>) -> Self {
+        Self {
+            role: role.into(),
+            content,
+            tool_calls,
+            tool_name: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -153,22 +171,44 @@ impl ChatRequest {
         let mut messages: Vec<ChatMessage> = Vec::new();
 
         if let Some(sys) = &req.system {
-            messages.push(ChatMessage {
-                role: "system".into(),
-                content: sys.clone(),
-            });
+            messages.push(ChatMessage::text("system", sys.clone(), vec![]));
         }
 
         for m in &req.messages {
-            messages.push(ChatMessage {
-                role: match m.role {
-                    Role::System => "system",
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
+            let role = match m.role {
+                Role::System => "system",
+                Role::User => "user",
+                Role::Assistant => "assistant",
+            };
+
+            let mut text = String::new();
+            let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+            for b in &m.content {
+                match b {
+                    ContentBlock::Text { text: t } => text.push_str(t),
+                    ContentBlock::ToolUse { name, input, .. } => {
+                        tool_calls.push(serde_json::json!({
+                            "function": { "name": name, "arguments": input }
+                        }));
+                    }
+                    // Tool results become standalone role:"tool" messages, the
+                    // shape Ollama's chat API expects.
+                    ContentBlock::ToolResult {
+                        content: result, ..
+                    } => {
+                        messages.push(ChatMessage {
+                            role: "tool".into(),
+                            content: result.clone(),
+                            tool_calls: vec![],
+                            tool_name: None,
+                        });
+                    }
                 }
-                .into(),
-                content: m.content.clone(),
-            });
+            }
+
+            if !text.is_empty() || !tool_calls.is_empty() {
+                messages.push(ChatMessage::text(role, text, tool_calls));
+            }
         }
 
         let options = ChatOptions {
@@ -181,11 +221,27 @@ impl ChatRequest {
             || options.num_predict.is_some()
             || !options.stop.is_empty();
 
+        let tools = req
+            .tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                })
+            })
+            .collect();
+
         Self {
             model,
             messages,
             stream,
             options: if has_options { Some(options) } else { None },
+            tools,
         }
     }
 }
@@ -210,11 +266,28 @@ fn parse_chat_response(
 ) -> Result<Response, ProviderError> {
     let content = raw["message"]["content"].as_str().unwrap_or("").to_string();
 
+    // Ollama tool calls have no provider-assigned id; synthesize stable ones.
+    let mut tool_calls: Vec<ToolUse> = Vec::new();
+    if let Some(calls) = raw["message"]["tool_calls"].as_array() {
+        for (i, c) in calls.iter().enumerate() {
+            let f = &c["function"];
+            tool_calls.push(ToolUse {
+                id: format!("call_{i}"),
+                name: f["name"].as_str().unwrap_or("").to_string(),
+                input: f["arguments"].clone(),
+            });
+        }
+    }
+
     let done_reason = raw["done_reason"].as_str().unwrap_or("stop");
-    let finish_reason = match done_reason {
-        "stop" => FinishReason::Stop,
-        "length" => FinishReason::MaxTokens,
-        other => FinishReason::Other(other.into()),
+    let finish_reason = if !tool_calls.is_empty() {
+        FinishReason::ToolUse
+    } else {
+        match done_reason {
+            "stop" => FinishReason::Stop,
+            "length" => FinishReason::MaxTokens,
+            other => FinishReason::Other(other.into()),
+        }
     };
 
     let model_str = raw["model"].as_str().unwrap_or(default_model.as_str());
@@ -226,6 +299,7 @@ fn parse_chat_response(
 
     Ok(Response {
         content,
+        tool_calls,
         usage,
         model: ModelId::new(model_str),
         finish_reason,
@@ -494,6 +568,83 @@ mod tests {
         let req = Request::default();
         let cr = ChatRequest::from_request(&req, &ModelId::new("m"), false);
         assert!(cr.options.is_none());
+    }
+
+    // ── Tools ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn chat_request_serializes_tools() {
+        let req = Request {
+            tools: vec![crate::types::ToolDefinition::new(
+                "get_weather",
+                "Get weather",
+                serde_json::json!({"type": "object"}),
+            )],
+            ..Default::default()
+        };
+        let cr = ChatRequest::from_request(&req, &ModelId::new("m"), false);
+        let body = serde_json::to_value(&cr).unwrap();
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["function"]["name"], "get_weather");
+        assert_eq!(body["tools"][0]["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn chat_request_tool_result_becomes_tool_role() {
+        let req = Request {
+            messages: vec![Message::tool_result("tu_1", "42", false)],
+            ..Default::default()
+        };
+        let cr = ChatRequest::from_request(&req, &ModelId::new("m"), false);
+        assert_eq!(cr.messages.len(), 1);
+        assert_eq!(cr.messages[0].role, "tool");
+        assert_eq!(cr.messages[0].content, "42");
+    }
+
+    #[test]
+    fn chat_request_assistant_tool_use_becomes_tool_calls() {
+        let req = Request {
+            messages: vec![Message::new(
+                Role::Assistant,
+                vec![ContentBlock::ToolUse {
+                    id: "x".into(),
+                    name: "get_weather".into(),
+                    input: serde_json::json!({"city": "SF"}),
+                }],
+            )],
+            ..Default::default()
+        };
+        let cr = ChatRequest::from_request(&req, &ModelId::new("m"), false);
+        let body = serde_json::to_value(&cr).unwrap();
+        assert_eq!(
+            body["messages"][0]["tool_calls"][0]["function"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            body["messages"][0]["tool_calls"][0]["function"]["arguments"]["city"],
+            "SF"
+        );
+    }
+
+    #[test]
+    fn parse_response_tool_calls() {
+        let raw = serde_json::json!({
+            "model": "llama3.2",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    { "function": { "name": "get_weather", "arguments": { "city": "SF" } } }
+                ]
+            },
+            "done_reason": "stop"
+        });
+        let resp = parse_chat_response(raw, &ModelId::new("f"), Duration::ZERO).unwrap();
+        assert_eq!(resp.finish_reason, FinishReason::ToolUse);
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].name, "get_weather");
+        assert_eq!(resp.tool_calls[0].input["city"], "SF");
+        assert_eq!(resp.tool_calls[0].id, "call_0");
     }
 
     #[test]
