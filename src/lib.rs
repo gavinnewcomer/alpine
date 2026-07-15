@@ -3,10 +3,12 @@ pub mod error;
 pub mod middleware;
 pub mod provider;
 pub mod providers;
+pub mod tool;
 pub mod types;
 
 // Convenience re-exports
 pub use client::AlpineClient;
 pub use error::ProviderError;
 pub use provider::Provider;
+pub use tool::{Tool, ToolError, ToolRun, Toolbox};
 pub use types::*;

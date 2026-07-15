@@ -233,6 +233,31 @@ pub enum FinishReason {
     Other(String),
 }
 
+impl Response {
+    /// Reconstruct the assistant turn this response represents as a `Message`,
+    /// preserving both text and any tool-use requests. Append this to the
+    /// conversation before returning tool results, so the provider sees the
+    /// request that the results answer (Anthropic in particular requires the
+    /// assistant `tool_use` to immediately precede the user `tool_result`).
+    pub fn assistant_message(&self) -> Message {
+        let mut content = Vec::new();
+        if !self.content.is_empty() {
+            content.push(ContentBlock::text(&self.content));
+        }
+        for call in &self.tool_calls {
+            content.push(ContentBlock::ToolUse {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                input: call.input.clone(),
+            });
+        }
+        Message {
+            role: Role::Assistant,
+            content,
+        }
+    }
+}
+
 impl std::fmt::Display for Response {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "[{}] ({:.0?})", self.model, self.latency)?;
