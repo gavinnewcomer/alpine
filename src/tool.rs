@@ -204,9 +204,7 @@ impl AlpineClient {
 mod tests {
     use super::*;
     use crate::provider::Provider;
-    use crate::types::{
-        ContentBlock, FinishReason, ModelId, Role, StreamResponse, ToolUse, Usage,
-    };
+    use crate::types::{ContentBlock, FinishReason, ModelId, Role, StreamResponse, ToolUse, Usage};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -218,11 +216,7 @@ mod tests {
     #[async_trait]
     impl Tool for Echo {
         fn definition(&self) -> ToolDefinition {
-            ToolDefinition::new(
-                "echo",
-                "Echo text",
-                serde_json::json!({"type": "object"}),
-            )
+            ToolDefinition::new("echo", "Echo text", serde_json::json!({"type": "object"}))
         }
 
         async fn call(&self, input: serde_json::Value) -> Result<String, ToolError> {
@@ -237,7 +231,11 @@ mod tests {
     #[async_trait]
     impl Tool for Boom {
         fn definition(&self) -> ToolDefinition {
-            ToolDefinition::new("boom", "Always fails", serde_json::json!({"type": "object"}))
+            ToolDefinition::new(
+                "boom",
+                "Always fails",
+                serde_json::json!({"type": "object"}),
+            )
         }
 
         async fn call(&self, _input: serde_json::Value) -> Result<String, ToolError> {
@@ -362,13 +360,18 @@ mod tests {
         // Conversation: user, assistant(tool_use), user(tool_result).
         assert_eq!(run.messages.len(), 3);
         assert_eq!(run.messages[1].role, Role::Assistant);
-        assert!(run.messages[1]
-            .content
-            .iter()
-            .any(|b| matches!(b, ContentBlock::ToolUse { .. })));
+        assert!(
+            run.messages[1]
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+        );
         assert!(matches!(
             run.messages[2].content[0],
-            ContentBlock::ToolResult { is_error: false, .. }
+            ContentBlock::ToolResult {
+                is_error: false,
+                ..
+            }
         ));
     }
 
